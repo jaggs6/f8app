@@ -65,6 +65,10 @@ import com.android.build.OutputFile
  * ]
  */
 
+project.ext.react = [
+    bundleInDebug: true
+]
+
 apply from: "react.gradle"
 
 /**
