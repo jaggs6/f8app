@@ -1,6 +1,6 @@
 import org.apache.tools.ant.taskdefs.condition.Os
 
-def config = project.hasProperty("react") ? project.react : [];
+def config = project.hasProperty("react") ? project.react : []
 
 def bundleAssetName = config.bundleAssetName ?: "index.android.bundle"
 def entryFile = config.entryFile ?: "index.android.js"
@@ -14,7 +14,7 @@ def reactRoot = elvisFile(config.root) ?: file("../../")
 def inputExcludes = config.inputExcludes ?: ["android/**", "ios/**"]
 
 void runBefore(String dependentTaskName, Task task) {
-    Task dependentTask = tasks.findByPath(dependentTaskName);
+    Task dependentTask = tasks.findByPath(dependentTaskName)
     if (dependentTask != null) {
         dependentTask.dependsOn task
     }
@@ -40,16 +40,20 @@ gradle.projectsEvaluated {
 
             // React js bundle directories
             def jsBundleDirConfigName = "jsBundleDir${targetName}"
+            def jsBundleDirTemp = file("$buildDir/react/assets/${targetPath}")
+            def jsBundleFileTemp = file("$jsBundleDirTemp/$bundleAssetName")
             def jsBundleDir = elvisFile(config."$jsBundleDirConfigName") ?:
                     file("$buildDir/intermediates/assets/${targetPath}")
 
             def resourcesDirConfigName = "resourcesDir${targetName}"
+            def resourcesDirTemp = file("$buildDir/react/res/merged/${targetPath}")
             def resourcesDir = elvisFile(config."${resourcesDirConfigName}") ?:
                     file("$buildDir/intermediates/res/merged/${targetPath}")
-            def jsBundleFile = file("$jsBundleDir/$bundleAssetName")
 
             // Bundle task name for variant
             def bundleJsAndAssetsTaskName = "bundle${targetName}JsAndAssets"
+            def copyJsTaskName = "copy${targetName}Js"
+            def copyAssetsTaskName = "copy${targetName}Assets"
 
             // Additional node and packager commandline arguments
             def nodeExecutableAndArgs = config.nodeExecutableAndArgs ?: ["node"]
@@ -63,14 +67,15 @@ gradle.projectsEvaluated {
 
                 // Create dirs if they are not there (e.g. the "clean" task just ran)
                 doFirst {
-                    jsBundleDir.mkdirs()
-                    resourcesDir.mkdirs()
+                    jsBundleDirTemp.mkdirs()
+                    resourcesDirTemp.mkdirs()
                 }
 
                 // Set up inputs and outputs so gradle can cache the result
                 inputs.files fileTree(dir: reactRoot, excludes: inputExcludes)
-                outputs.dir jsBundleDir
-                outputs.dir resourcesDir
+                outputs.dir jsBundleDirTemp
+                outputs.dir resourcesDirTemp
+                outputs.cacheIf { true }
 
                 // Set up the call to the react-native cli
                 workingDir reactRoot
@@ -79,10 +84,10 @@ gradle.projectsEvaluated {
                 def devEnabled = !targetName.toLowerCase().contains("release")
                 if (Os.isFamily(Os.FAMILY_WINDOWS)) {
                     commandLine("cmd", "/c", *nodeExecutableAndArgs, "node_modules/react-native/local-cli/cli.js", "bundle", "--platform", "android", "--dev", "${devEnabled}",
-                            "--reset-cache", "--entry-file", entryFile, "--bundle-output", jsBundleFile, "--assets-dest", resourcesDir, *extraPackagerArgs)
+                            "--reset-cache", "--entry-file", entryFile, "--bundle-output", jsBundleFileTemp, "--assets-dest", resourcesDirTemp, *extraPackagerArgs)
                 } else {
                     commandLine(*nodeExecutableAndArgs, "node_modules/react-native/local-cli/cli.js", "bundle", "--platform", "android", "--dev", "${devEnabled}",
-                            "--reset-cache", "--entry-file", entryFile, "--bundle-output", jsBundleFile, "--assets-dest", resourcesDir, *extraPackagerArgs)
+                            "--reset-cache", "--entry-file", entryFile, "--bundle-output", jsBundleFileTemp, "--assets-dest", resourcesDirTemp, *extraPackagerArgs)
                 }
 
                 enabled config."bundleIn${targetName}" ||
@@ -90,15 +95,32 @@ gradle.projectsEvaluated {
                             targetName.toLowerCase().contains("release")
             }
 
+            def copyJsTask = tasks.create(
+                    name: copyJsTaskName,
+                    type: Copy) {
+                from jsBundleDirTemp
+                into jsBundleDir
+            }
+
+            def copyAssetsTask = tasks.create(
+                    name: copyAssetsTaskName,
+                    type: Copy) {
+                from resourcesDirTemp
+                into resourcesDir
+            }
+
             // Hook bundle${productFlavor}${buildType}JsAndAssets into the android build process
             currentBundleTask.dependsOn("merge${targetName}Resources")
             currentBundleTask.dependsOn("merge${targetName}Assets")
 
-            runBefore("process${flavorNameCapitalized}Armeabi-v7a${buildNameCapitalized}Resources", currentBundleTask)
-            runBefore("process${flavorNameCapitalized}X86${buildNameCapitalized}Resources", currentBundleTask)
-            runBefore("processUniversal${targetName}Resources", currentBundleTask)
-            runBefore("process${targetName}Resources", currentBundleTask)
-            runBefore("dataBindingProcessLayouts${targetName}", currentBundleTask)
+            copyJsTask.dependsOn(bundleJsAndAssetsTaskName)
+            copyAssetsTask.dependsOn(copyJsTaskName)
+
+            runBefore("process${flavorNameCapitalized}Armeabi-v7a${buildNameCapitalized}Resources", copyAssetsTask)
+            runBefore("process${flavorNameCapitalized}X86${buildNameCapitalized}Resources", copyAssetsTask)
+            runBefore("processUniversal${targetName}Resources", copyAssetsTask)
+            runBefore("process${targetName}Resources", copyAssetsTask)
+            runBefore("dataBindingProcessLayouts${targetName}", copyAssetsTask)
         }
     }
 }
